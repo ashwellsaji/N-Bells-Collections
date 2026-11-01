@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>N Bells Collections Admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <style>
+    body { font-family:Arial; background:#fff8f3; color:#49332d; padding:25px; }
+    main { max-width:700px; margin:auto; }
+    section { background:white; padding:20px; margin:18px 0; border-radius:12px; }
+    input,select,button { display:block; width:100%; padding:12px; margin:10px 0; box-sizing:border-box; }
+    button { background:#a85d65; color:white; border:0; border-radius:7px; cursor:pointer; }
+    .product { border:1px solid #eadbd2; padding:12px; margin:12px 0; border-radius:8px; }
+    .hero-preview { width:100%; max-width:360px; height:150px; object-fit:cover; border-radius:8px; display:block; }
+    img { width:100px; height:100px; object-fit:cover; }
+    #message { white-space:pre-wrap; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>N Bells Collections</h1>
+  <h2>Admin Dashboard</h2>
+
+  <section id="login">
+    <h3>Admin Login</h3>
+    <input id="email" type="email" placeholder="Email">
+    <input id="password" type="password" placeholder="Password">
+    <button onclick="login()">Sign In</button>
+  </section>
+
+  <section id="panel" hidden>
+    <button onclick="logout()">Log Out</button>
+    <section>
+      <h3>Hero Images Manager</h3>
+      <p>Choose a banner for each homepage slide. Uploading replaces that banner.</p>
+      <label>Hero banner 1</label>
+      <input id="hero1" type="file" accept="image/*">
+      <button onclick="uploadHero(1)">Update Hero 1</button>
+      <label>Hero banner 2</label>
+      <input id="hero2" type="file" accept="image/*">
+      <button onclick="uploadHero(2)">Update Hero 2</button>
+      <label>Hero banner 3</label>
+      <input id="hero3" type="file" accept="image/*">
+      <button onclick="uploadHero(3)">Update Hero 3</button>
+      <p id="heroMessage" aria-live="polite"></p>
+    </section>
+    <h3 id="heading">Add Product</h3>
+    <input id="pid" type="hidden">
+    <input id="name" placeholder="Product name">
+    <input id="price" type="number" min="0" step="0.01" placeholder="Price">
+    <select id="category">
+      <option value="">Choose category</option>
+      <option>Earrings</option>
+      <option>Necklaces</option>
+      <option>Sets</option>
+      <option>Bracelets</option>
+    </select>
+    <label>Product photo</label>
+    <input id="photo" type="file" accept="image/*">
+    <button onclick="saveProduct()">Save Product</button>
+    <button onclick="clearForm()">Cancel Edit</button>
+    <p id="message"></p>
+    <hr>
+    <h3>Your Products</h3>
+    <div id="products"></div>
+  </section>
+</main>
+
+<script>
+let db;
+
+function start() {
+  if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY ||
+      window.SUPABASE_URL.includes("YOUR_") ||
+      window.SUPABASE_ANON_KEY.includes("YOUR_")) {
+    document.getElementById("login").innerHTML =
+      "Connection settings missing. Check config.js.";
+    return;
+  }
+  db = window.supabase.createClient(
+    window.SUPABASE_URL, window.SUPABASE_ANON_KEY
+  );
+  db.auth.getSession().then(({data}) => {
+    if (data.session) showPanel();
+  });
+}
+
+async function login() {
+  const {error} = await db.auth.signInWithPassword({
+    email: document.getElementById("email").value.trim(),
+    password: document.getElementById("password").value
+  });
+  if (error) return alert(error.message);
+  showPanel();
+}
+
+async function logout() {
+  await db.auth.signOut();
+  location.reload();
+}
+
+function showPanel() {
+  document.getElementById("login").hidden = true;
+  document.getElementById("panel").hidden = false;
+  loadProducts();
+}
+
+
+async function uploadHero(number) {
+  const input = document.getElementById("hero" + number);
+  const message = document.getElementById("heroMessage");
+  const file = input.files[0];
+  if (!file) {
+    message.textContent = "Please choose an image for Hero " + number + ".";
+    return;
+  }
+  if (!file.type.startsWith("image/")) {
+    message.textContent = "Please choose an image file.";
+    return;
+  }
+  if (file.size > 8 * 1024 * 1024) {
+    message.textContent = "Image must be under 8 MB.";
+    return;
+  }
+
+  message.textContent = "Uploading Hero " + number + "...";
+  try {
+    const path = "hero-banners/hero" + number + "." +
+      ((file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg");
+    const { error } = await db.storage.from("product-images").upload(path, file, {
+      upsert: true,
+      contentType: file.type,
+      cacheControl: "0"
+    });
+    if (error) throw error;
+    message.textContent = "Hero " + number + " uploaded. The homepage must be connected to this banner URL before it appears there.";
+    input.value = "";
+  } catch (e) {
+    message.textContent = "Upload error: " + e.message;
+  }
+}
+
+async function saveProduct() {
+  const message = document.getElementById("message");
+  try {
+    const id = document.getElementById("pid").value;
+    let image_url = document.getElementById("oldImage")?.value || null;
+    const file = document.getElementById("photo").files[0];
+
+    if (file) {
+      if (!file.type.startsWith("image/")) throw Error("Choose an image.");
+      if (file.size > 8 * 1024 * 1024) throw Error("Image must be under 8 MB.");
+      const path = Date.now() + "-" + file.name.replace(/[^a-zA-Z0-9._-]/g,"-");
+      const {error} = await db.storage.from("product-images").upload(path,file);
+      if (error) throw error;
+      image_url = db.storage.from("product-images").getPublicUrl(path).data.publicUrl;
+    }
+
+    const product = {
+      name: document.getElementById("name").value.trim(),
+      price: Number(document.getElementById("price").value),
+      category: document.getElementById("category").value,
+      image_url
+    };
+
+    if (!product.name || !product.category || !Number.isFinite(product.price) || product.price < 0)
+      throw Error("Enter a name, valid price and category.");
+
+    const result = id
+      ? await db.from("products").update(product).eq("id",id)
+      : await db.from("products").insert(product);
+
+    if (result.error) throw result.error;
+    message.textContent = "Product saved successfully!";
+    clearForm();
+    loadProducts();
+  } catch(e) {
+    message.textContent = "Error: " + e.message;
+  }
+}
+
+function clearForm() {
+  document.getElementById("pid").value = "";
+  document.getElementById("name").value = "";
+  document.getElementById("price").value = "";
+  document.getElementById("category").value = "";
+  document.getElementById("photo").value = "";
+  document.getElementById("heading").textContent = "Add Product";
+  document.getElementById("oldImage")?.remove();
+}
+
+async function loadProducts() {
+  const box = document.getElementById("products");
+  box.textContent = "Loading...";
+  const {data,error} = await db.from("products").select("*").order("created_at",{ascending:false});
+  if (error) { box.textContent = error.message; return; }
+  box.innerHTML = "";
+  data.forEach(p => {
+    const item = document.createElement("div");
+    item.className = "product";
+    const title = document.createElement("b");
+    title.textContent = p.name;
+    item.appendChild(title);
+    item.appendChild(document.createElement("br"));
+    if (p.image_url) {
+      const img = document.createElement("img");
+      img.src = p.image_url;
+      img.alt = p.name;
+      item.appendChild(img);
+    }
+    const details = document.createElement("p");
+    details.textContent = "₹" + p.price + " · " + p.category;
+    item.appendChild(details);
+    const edit = document.createElement("button");
+    edit.textContent = "Edit";
+    edit.onclick = () => {
+      document.getElementById("pid").value = p.id;
+      document.getElementById("name").value = p.name;
+      document.getElementById("price").value = p.price;
+      document.getElementById("category").value = p.category;
+      document.getElementById("heading").textContent = "Edit Product";
+      let old = document.getElementById("oldImage");
+      if (!old) {
+        old = document.createElement("input");
+        old.type = "hidden";
+        old.id = "oldImage";
+        document.querySelector("#panel").appendChild(old);
+      }
+      old.value = p.image_url || "";
+      window.scrollTo(0,0);
+    };
+    item.appendChild(edit);
+    const del = document.createElement("button");
+    del.textContent = "Delete";
+    del.onclick = async () => {
+      if (!confirm("Delete " + p.name + "?")) return;
+      const {error} = await db.from("products").delete().eq("id",p.id);
+      if (error) alert(error.message);
+      else loadProducts();
+    };
+    item.appendChild(del);
+    box.appendChild(item);
+  });
+  if (!data.length) box.textContent = "No products added yet.";
+}
+
+start();
+</script>
+</body>
+</html>
